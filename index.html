@@ -6811,135 +6811,157 @@ title="Hapus akun dari list">
 
     // === window.onload (CLOUD LOGIN VERSION + MULTI CLOUD + NAMESPACE) ===
     window.onload = async function() {
-        // 🆕 ⓪ MIGRASI NAMESPACE (BACKWARD COMPATIBLE)
-        migrateToNamespace();
+    // ⓪ Migrasi
+    migrateToNamespace();
+    if (typeof migrateSingleToMultiCloud === 'function') {
+        migrateSingleToMultiCloud();
+    }
+    
+    // ✅ Cek reset
+    const urlParams = new URLSearchParams(window.location.search);
+    const isReset = urlParams.get('reset') === '1';
+    if (isReset) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+        document.getElementById('lockScreen').style.display = 'none';
+        document.getElementById('profileLoginScreen').style.display = 'none';
+        document.getElementById('cloudLoginScreen').style.display = 'flex';
+        return;
+    }
+    
+    // ✅ Cek cloud switch
+    const isCloudSwitch = urlParams.get('cloud_switch') === '1';
+    if (isCloudSwitch) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+        sessionStorage.setItem('vault_cloud_switching', 'true');
+    }
+    
+    // ① Setup tema
+    const savedTheme = localStorage.getItem('vault_theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    updateThemeToggleIcon(savedTheme);
+    
+    // ② Cek cloud login
+    const cloudLoggedIn = checkCloudLoginStatus();
+    if (getCloudAuthUrl() && !cloudLoggedIn) {
+        console.log('🔒 Menunggu login cloud...');
+        return;
+    }
+    
+    // ③ Cek first-time setup
+    if (typeof checkFirstTimeSetup === 'function' && checkFirstTimeSetup()) return;
+    
+    // ④ ✅ AUTO-CREATE PROFIL JIKA KOSONG (FIX UTAMA!)
+    if (profiles.length === 0) {
+        const cloudAuth = getActiveCloudAccount();
+        const defaultProfile = {
+            id: 'prof_auto_' + Date.now(),
+            name: cloudAuth?.name || 'Profil Utama',
+            apiUrl: getAuthServerUrl() || getMasterDbUrl() || ''
+        };
+        profiles.push(defaultProfile);
+        uSet('profiles', JSON.stringify(profiles));
+        activeProfileId = defaultProfile.id;
+        uSet('active_profile', activeProfileId);
         
-        // 🆕 ⓪ MIGRASI SINGLE → MULTI CLOUD (BACKWARD COMPATIBLE)
-        if (typeof migrateSingleToMultiCloud === 'function') {
-            migrateSingleToMultiCloud();
+        if (getMasterDbUrl()) {
+            syncProfilesToCloud().catch(e => console.warn('Auto-sync gagal:', e));
         }
-        // ✅ CEK APAKAH BARU RESET
-        const urlParams = new URLSearchParams(window.location.search);
-        const isReset = urlParams.get('reset') === '1';
-        if (isReset) {
-            window.history.replaceState({}, document.title, window.location.pathname);
-            document.getElementById('lockScreen').style.display = 'none';
-            document.getElementById('profileLoginScreen').style.display = 'none';
-            document.getElementById('cloudLoginScreen').style.display = 'flex';
-            return;
-        }
-        // ✅ CEK APAKAH SEDANG SWITCH CLOUD ACCOUNT (LANGSUNG KE DASHBOARD)
-        const isCloudSwitch = urlParams.get('cloud_switch') === '1';
-        if (isCloudSwitch) {
-            // Hapus parameter dari URL
-            window.history.replaceState({}, document.title, window.location.pathname);
-            // Set flag di sessionStorage
-            sessionStorage.setItem('vault_cloud_switching', 'true');
-        }
-        // ① SETUP TEMA (INSTAN!)
-        const savedTheme = localStorage.getItem('vault_theme') || 'dark';
-        document.documentElement.setAttribute('data-theme', savedTheme);
-        updateThemeToggleIcon(savedTheme);
-        // ② CEK CLOUD LOGIN STATUS
-        const cloudLoggedIn = checkCloudLoginStatus();
-        if (getCloudAuthUrl() && !cloudLoggedIn) {
-            console.log('🔒 Menunggu login cloud...');
-            return;
-        }
-        // ③ CEK FIRST-TIME SETUP
-        if (checkFirstTimeSetup()) return;
-        // ④ INIT PROFILE SYSTEM (INSTAN dari localStorage!)
-        const profileReady = initProfileSystem();
-        if (!profileReady) return;
-        // ⑤ SETUP PIN
-        const pinEnabled = localStorage.getItem('vault_pin_enabled') !== 'false';
-        const pinToggle = safeGet('pin-toggle');
-        if (pinToggle) pinToggle.checked = pinEnabled;
-        if (!pinEnabled) {
-            const ls = safeGet('lockScreen');
-            if (ls) ls.style.display = 'none';
-            sessionStorage.setItem('vault_unlocked', 'true');
-        } else if (sessionStorage.getItem('vault_unlocked') === 'true') {
-            const ls = safeGet('lockScreen');
-            if (ls) ls.style.display = 'none';
-        }
-        // ⑥ LOAD DATA LOKAL (INSTAN!)
-        if (typeof loadDataDariMemoriLokal === "function") {
-            loadDataDariMemoriLokal();
-        }
-        // ⑦ INIT VAULTS
-        saveVaults();
-        accounts.forEach(a => { if (!a.vault_id) a.vault_id = 'default'; });
-        notes.forEach(n => { if (!n.vault_id) n.vault_id = 'default'; });
-        // ⑧ Update DB info di modal
-        const savedUrl = uGet('api_url');
-        if (savedUrl) {
-            const currentDbUrl = safeGet('current-db-url');
-            if (currentDbUrl) currentDbUrl.textContent = savedUrl;
-        }
-        // ⑨ RENDER UI PERTAMA KALI (pakai data lokal - INSTAN!)
-        renderStats();
-        renderCurrentView();
-        updateSyncStatus();
-        // ⑩ UPDATE CLOUD USER INFO
-        if (typeof updateCloudUserInfo === 'function') {
-            updateCloudUserInfo();
-        }
-        // 🆕 ½ UPDATE COUNTER CLOUD ACCOUNTS DI SIDEBAR
-        if (typeof getCloudAccounts === 'function') {
-            const cloudAccCount = document.getElementById('cloud-account-count');
-            if (cloudAccCount) {
-                cloudAccCount.textContent = getCloudAccounts().length;
-            }
-        }
-        // ⑪  PARALEL LOAD - JALANKAN BARENGAN!
-        const masterUrl = getMasterDbUrl();
-        const promises = [];
-        // Load profil dari cloud (pakai cache!)
-        if (masterUrl) {
-            promises.push(
-                loadProfilesFromCloud()
+        
+        showToast(`✅ Profil "${defaultProfile.name}" dibuat otomatis`, 'fa-user-check');
+    }
+    
+    const profileReady = initProfileSystem();
+    if (!profileReady) return;
+    
+    // ⑤ Setup PIN
+    const pinEnabled = localStorage.getItem('vault_pin_enabled') !== 'false';
+    const pinToggle = safeGet('pin-toggle');
+    if (pinToggle) pinToggle.checked = pinEnabled;
+    if (!pinEnabled) {
+        const ls = safeGet('lockScreen');
+        if (ls) ls.style.display = 'none';
+        sessionStorage.setItem('vault_unlocked', 'true');
+    } else if (sessionStorage.getItem('vault_unlocked') === 'true') {
+        const ls = safeGet('lockScreen');
+        if (ls) ls.style.display = 'none';
+    }
+    
+    // ⑥ Load data lokal
+    if (typeof loadDataDariMemoriLokal === "function") {
+        loadDataDariMemoriLokal();
+    }
+    
+    // ⑦ Init vaults
+    saveVaults();
+    accounts.forEach(a => { if (!a.vault_id) a.vault_id = 'default'; });
+    notes.forEach(n => { if (!n.vault_id) n.vault_id = 'default'; });
+    
+    // ⑧ Update DB info
+    const savedUrl = uGet('api_url');
+    if (savedUrl) {
+        const currentDbUrl = safeGet('current-db-url');
+        if (currentDbUrl) currentDbUrl.textContent = savedUrl;
+    }
+    
+    // ⑨ Render UI
+    renderStats();
+    renderCurrentView();
+    updateSyncStatus();
+    
+    // ⑩ Update cloud user info
+    if (typeof updateCloudUserInfo === 'function') updateCloudUserInfo();
+    
+    // ½ Update counter cloud accounts
+    if (typeof getCloudAccounts === 'function') {
+        const cloudAccCount = document.getElementById('cloud-account-count');
+        if (cloudAccCount) cloudAccCount.textContent = getCloudAccounts().length;
+    }
+    
+    // ⑪ Parallel load
+    const masterUrl = getMasterDbUrl();
+    const promises = [];
+    
+    if (masterUrl) {
+        promises.push(
+            loadProfilesFromCloud()
                 .then(() => {
-                    console.log('✅ Profil cloud dimuat');
                     renderProfileDropdown();
-                    // 🆕 Render juga cloud accounts dropdown
                     if (typeof renderCloudAccountsDropdown === 'function') {
                         renderCloudAccountsDropdown();
                     }
                 })
                 .catch(e => console.warn('⚠️ Load profil gagal:', e))
-            );
-        }
-        // Fetch data terbaru dari cloud
-        if (apiUrl && isOnline) {
-            promises.push(
-                fetchData()
+        );
+    }
+    
+    if (apiUrl && isOnline) {
+        promises.push(
+            fetchData()
                 .then(() => {
-                    console.log('✅ Data cloud terbaru dimuat');
-                    // Render ulang SETELAH data baru datang
                     renderStats();
                     renderCurrentView();
                 })
                 .catch(e => console.warn('⚠️ Fetch data gagal:', e))
-            );
-        }
-        // Process sync queue
-        if (isOnline && syncQueue.length > 0) {
-            promises.push(
-                new Promise(resolve => {
-                    setTimeout(() => {
-                        processSyncQueue().then(resolve).catch(resolve);
-                    }, 1000);
-                })
-            );
-            startAutoRetry();
-        }
-        // Tunggu semua promise selesai (tapi tidak blocking UI!)
-        Promise.all(promises).catch(e => console.warn('⚠️ Beberapa background task gagal:', e));
-        // ⑫ INIT LAINNYA (INSTAN!)
-        initLongPressEvents();
-        renderQuickActions();
-    };
+        );
+    }
+    
+    if (isOnline && syncQueue.length > 0) {
+        promises.push(
+            new Promise(resolve => {
+                setTimeout(() => {
+                    processSyncQueue().then(resolve).catch(resolve);
+                }, 1000);
+            })
+        );
+        startAutoRetry();
+    }
+    
+    Promise.all(promises).catch(e => console.warn('⚠️ Background task gagal:', e));
+    
+    // ⑫ Init lainnya
+    initLongPressEvents();
+    renderQuickActions();
+};
 
     async function fetchData(dataType, skipTabChange) {
         if (!navigator.onLine) { loadDataDariMemoriLokal(); return; }
